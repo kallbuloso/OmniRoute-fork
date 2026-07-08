@@ -57,8 +57,6 @@ services:
     expose:
       - "${DASHBOARD_PORT:-20128}"
       - "${API_PORT:-20129}"
-    profiles:
-      - base
 
   # ── Profile: web (runner-web + Chromium/Playwright) ────────────────
   omniroute-web:
@@ -70,8 +68,6 @@ services:
     expose:
       - "${DASHBOARD_PORT:-20128}"
       - "${API_PORT:-20129}"
-    profiles:
-      - web
 
   # ── Profile: cli (CLIs installed inside container) ─────────────────
   omniroute-cli:
@@ -88,8 +84,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
       - ${AUTO_UPDATE_HOST_REPO_DIR:-.}:/workspace/omniroute:rw
-    profiles:
-      - cli
 
   # ── Profile: host (host-mounted CLI binaries, Linux-first) ────────
   omniroute-host:
@@ -120,8 +114,6 @@ services:
       - ~/.openclaw:/host-home/.openclaw:rw
       - ~/.cursor:/host-home/.cursor:rw
       - ~/.config/cursor:/host-home/.config/cursor:rw
-    profiles:
-      - host
 
   # ── Profile: memory (Qdrant semantic-memory sidecar) ─────────────
   qdrant:
@@ -140,8 +132,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    profiles:
-      - memory
 
   # ── Profile: bifrost (Bifrost Go LLM-router sidecar) ─────────────
   bifrost:
@@ -159,8 +149,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    profiles:
-      - bifrost
 
   # ── Profile: cliproxyapi (CLIProxyAPI as sidecar) ─────────────────
   cliproxyapi:
@@ -180,8 +168,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    profiles:
-      - cliproxyapi
 
 volumes:
   omniroute-data:
