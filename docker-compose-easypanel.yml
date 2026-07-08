@@ -1,0 +1,196 @@
+# ──────────────────────────────────────────────────────────────────────
+#  OmniRoute — Docker Compose (Easypanel Optimized)
+# ──────────────────────────────────────────────────────────────────────
+#
+#  Optimized for Easypanel:
+#    - Removed all hardcoded `container_name` to prevent deployment conflicts
+#    - Replaced all `ports` mapping with `expose` to let Easypanel manage ingress routing
+#    - Replaced `./data` relative mount with `omniroute-data` named volume for storage persistence
+#
+#  Usage (managed via Easypanel, or CLI):
+#    docker compose -f docker-compose-easypanel.yml --profile base up -d
+# ──────────────────────────────────────────────────────────────────────
+
+x-common: &common
+  restart: unless-stopped
+  stop_grace_period: 40s
+  env_file: .env
+  environment:
+    - DATA_DIR=/app/data # Must match the volume mount below
+    - PORT=${PORT:-20128}
+    - DASHBOARD_PORT=${DASHBOARD_PORT:-20128}
+    - API_PORT=${API_PORT:-20129}
+    - API_HOST=${API_HOST:-0.0.0.0}
+    - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+  volumes:
+    - omniroute-data:/app/data
+  healthcheck:
+    test: ["CMD", "node", "healthcheck.mjs"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 15s
+
+services:
+  # ── Redis (Rate Limiter Backend) ──────────────────────────────────
+  redis:
+    image: docker.io/library/redis:7-alpine
+    restart: unless-stopped
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Profile: base (minimal, no CLI tools) ──────────────────────────
+  omniroute-base:
+    <<: *common
+    build:
+      context: .
+      target: runner-base
+    image: omniroute:base
+    expose:
+      - "${DASHBOARD_PORT:-20128}"
+      - "${API_PORT:-20129}"
+    profiles:
+      - base
+
+  # ── Profile: web (runner-web + Chromium/Playwright) ────────────────
+  omniroute-web:
+    <<: *common
+    build:
+      context: .
+      target: runner-web
+    image: omniroute:web
+    expose:
+      - "${DASHBOARD_PORT:-20128}"
+      - "${API_PORT:-20129}"
+    profiles:
+      - web
+
+  # ── Profile: cli (CLIs installed inside container) ─────────────────
+  omniroute-cli:
+    <<: *common
+    build:
+      context: .
+      target: runner-cli
+    image: omniroute:cli
+    expose:
+      - "${DASHBOARD_PORT:-20128}"
+      - "${API_PORT:-20129}"
+    volumes:
+      - omniroute-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      - ${AUTO_UPDATE_HOST_REPO_DIR:-.}:/workspace/omniroute:rw
+    profiles:
+      - cli
+
+  # ── Profile: host (host-mounted CLI binaries, Linux-first) ────────
+  omniroute-host:
+    <<: *common
+    build:
+      context: .
+      target: runner-base
+    image: omniroute:base
+    expose:
+      - "${DASHBOARD_PORT:-20128}"
+      - "${API_PORT:-20129}"
+    environment:
+      - DATA_DIR=/app/data
+      - PORT=${PORT:-20128}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-20128}
+      - API_PORT=${API_PORT:-20129}
+      - API_HOST=${API_HOST:-0.0.0.0}
+      - CLI_MODE=host
+      - CLI_EXTRA_PATHS=/host-local/bin:/host-node/bin
+      - CLI_CONFIG_HOME=/host-home
+      - CLI_ALLOW_CONFIG_WRITES=true
+    volumes:
+      - omniroute-data:/app/data
+      - ~/.local/bin:/host-local/bin:ro
+      - ~/.codex:/host-home/.codex:rw
+      - ~/.claude:/host-home/.claude:rw
+      - ~/.factory:/host-home/.factory:rw
+      - ~/.openclaw:/host-home/.openclaw:rw
+      - ~/.cursor:/host-home/.cursor:rw
+      - ~/.config/cursor:/host-home/.config/cursor:rw
+    profiles:
+      - host
+
+  # ── Profile: memory (Qdrant semantic-memory sidecar) ─────────────
+  qdrant:
+    image: docker.io/qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    expose:
+      - "${QDRANT_PORT:-6333}"
+      - "${QDRANT_GRPC_PORT:-6334}"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:6333/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - memory
+
+  # ── Profile: bifrost (Bifrost Go LLM-router sidecar) ─────────────
+  bifrost:
+    image: ghcr.io/maximhq/bifrost:1.5.21
+    restart: unless-stopped
+    expose:
+      - "${BIFROST_PORT:-8080}"
+    volumes:
+      - bifrost-data:/data
+    environment:
+      - BIFROST_LOG_LEVEL=${BIFROST_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - bifrost
+
+  # ── Profile: cliproxyapi (CLIProxyAPI as sidecar) ─────────────────
+  cliproxyapi:
+    image: ghcr.io/router-for-me/cliproxyapi:v6.9.7
+    restart: unless-stopped
+    expose:
+      - "${CLIPROXYAPI_PORT:-8317}"
+    volumes:
+      - cliproxyapi-data:/root/.cli-proxy-api
+    environment:
+      - PORT=${CLIPROXYAPI_PORT:-8317}
+      - HOST=0.0.0.0
+    healthcheck:
+      test:
+        ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:${CLIPROXYAPI_PORT:-8317}/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - cliproxyapi
+
+volumes:
+  omniroute-data:
+    name: omniroute-data
+  cliproxyapi-data:
+    name: cliproxyapi-data
+  redis-data:
+    name: omniroute-redis-data
+  qdrant-data:
+    name: omniroute-qdrant-data
+  bifrost-data:
+    name: omniroute-bifrost-data
